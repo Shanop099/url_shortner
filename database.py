@@ -1,8 +1,6 @@
 import sqlite3
-import os
 
-# Use writable path on Render
-DB_PATH = "/tmp/urls.db"
+DB_PATH = "/tmp/urls.db"   # important for Render
 
 def get_connection():
     return sqlite3.connect(DB_PATH, check_same_thread=False)

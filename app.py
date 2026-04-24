@@ -15,7 +15,7 @@ app = Flask(__name__)
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000/")
 redis_url = os.getenv("REDIS_URL", "")
 
-# Redis safe setup
+# Redis setup
 try:
     r = redis.from_url(redis_url, decode_responses=True)
     r.ping()
@@ -25,7 +25,7 @@ except:
     REDIS_AVAILABLE = False
     print("⚠️ Redis not available")
 
-# Init DB (VERY IMPORTANT)
+# Init DB
 init_db()
 
 RATE_LIMIT = 5
@@ -48,6 +48,11 @@ def is_rate_limited(ip):
         return False
 
     return False
+
+# ---------------- FIX favicon ----------------
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
 
 # ---------------- UI ----------------
 @app.route("/")
@@ -114,7 +119,7 @@ def shorten():
         except:
             pass
 
-    # QR
+    # QR Code
     qr = qrcode.make(BASE_URL + short_code)
     buffer = io.BytesIO()
     qr.save(buffer, format="PNG")
@@ -128,6 +133,11 @@ def shorten():
 # ---------------- REDIRECT ----------------
 @app.route("/<short_code>")
 def redirect_url(short_code):
+
+    # ignore invalid paths
+    if short_code in ["favicon.ico", "shorten", "stats"]:
+        return "", 204
+
     try:
         # Redis first
         if REDIS_AVAILABLE:
@@ -136,8 +146,8 @@ def redirect_url(short_code):
                 if cached:
                     r.incr(f"clicks:{short_code}")
                     return redirect(cached)
-            except Exception as e:
-                print("Redis error:", e)
+            except:
+                pass
 
         # DB fallback
         conn = get_connection()
@@ -158,6 +168,7 @@ def redirect_url(short_code):
         conn.commit()
         conn.close()
 
+        # Cache again
         if REDIS_AVAILABLE:
             try:
                 r.set(short_code, url)
@@ -167,8 +178,8 @@ def redirect_url(short_code):
         return redirect(url)
 
     except Exception as e:
-        print("🔥 ERROR:", str(e))
-        return f"Error: {str(e)}", 500
+        print("🔥 ERROR:", e)
+        return "Internal error", 500
 
 # ---------------- STATS ----------------
 @app.route("/stats/<short_code>")
