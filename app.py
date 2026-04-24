@@ -1,15 +1,21 @@
 from flask import Flask, request, redirect, jsonify, render_template
-from database import init_db, get_connection
-from utils import generate_code
-import os
+import random, string
+import qrcode
+import io, base64
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000/")
+BASE_URL = "https://url-shortner-gtbu.onrender.com/"
 
-init_db()
+# 🔥 In-memory store (stable)
+url_db = {}
+clicks_db = {}
 
-# ---------------- FIX URL ----------------
+# ---------------- UTILS ----------------
+def generate_code(length=6):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+
 def fix_url(url):
     if not url.startswith(("http://", "https://")):
         return "https://" + url
@@ -33,32 +39,27 @@ def shorten():
 
     url = fix_url(url)
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
     if custom:
-        cursor.execute("SELECT 1 FROM urls WHERE short_code=?", (custom,))
-        if cursor.fetchone():
+        if custom in url_db:
             return jsonify({"error": "Custom already exists"}), 400
         short_code = custom
     else:
         short_code = generate_code()
-        while True:
-            cursor.execute("SELECT 1 FROM urls WHERE short_code=?", (short_code,))
-            if not cursor.fetchone():
-                break
+        while short_code in url_db:
             short_code = generate_code()
 
-    cursor.execute(
-        "INSERT INTO urls (short_code, original_url) VALUES (?, ?)",
-        (short_code, url)
-    )
+    url_db[short_code] = url
+    clicks_db[short_code] = 0
 
-    conn.commit()
-    conn.close()
+    # QR code
+    qr = qrcode.make(BASE_URL + short_code)
+    buffer = io.BytesIO()
+    qr.save(buffer, format="PNG")
+    qr_base64 = base64.b64encode(buffer.getvalue()).decode()
 
     return jsonify({
-        "short_url": BASE_URL + short_code
+        "short_url": BASE_URL + short_code,
+        "qr": qr_base64
     })
 
 # ---------------- REDIRECT ----------------
@@ -68,58 +69,23 @@ def redirect_url(short_code):
     if short_code in ["favicon.ico", "shorten", "stats"]:
         return "", 204
 
-    conn = None
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
+    if short_code not in url_db:
+        return "Not found", 404
 
-        cursor.execute(
-            "SELECT original_url, clicks FROM urls WHERE short_code=?",
-            (short_code,)
-        )
+    clicks_db[short_code] += 1
 
-        result = cursor.fetchone()
-
-        if not result:
-            return "Not found", 404
-
-        url, clicks = result
-
-        cursor.execute(
-            "UPDATE urls SET clicks=? WHERE short_code=?",
-            (clicks + 1, short_code)
-        )
-        conn.commit()
-
-        return redirect(url)
-
-    except Exception as e:
-        return f"ERROR: {str(e)}", 500
-
-    finally:
-        if conn:
-            conn.close()
+    return redirect(url_db[short_code])
 
 # ---------------- STATS ----------------
 @app.route("/stats/<short_code>")
 def stats(short_code):
-    conn = get_connection()
-    cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT original_url, clicks FROM urls WHERE short_code=?",
-        (short_code,)
-    )
-
-    result = cursor.fetchone()
-    conn.close()
-
-    if not result:
+    if short_code not in url_db:
         return jsonify({"error": "Not found"}), 404
 
     return jsonify({
-        "url": result[0],
-        "clicks": result[1]
+        "url": url_db[short_code],
+        "clicks": clicks_db[short_code]
     })
 
 if __name__ == "__main__":
