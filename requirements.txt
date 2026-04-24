@@ -1,0 +1,4 @@
+flask
+redis
+qrcode[pil]
+gunicorn
