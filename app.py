@@ -2,8 +2,6 @@ from flask import Flask, request, redirect, jsonify, render_template
 from database import init_db, get_connection
 from utils import generate_code
 import os
-import sqlite3
-from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -33,7 +31,6 @@ def shorten():
     if not url:
         return jsonify({"error": "URL required"}), 400
 
-    # 🔥 FIX URL BEFORE STORING
     url = fix_url(url)
 
     conn = get_connection()
@@ -67,11 +64,12 @@ def shorten():
 # ---------------- REDIRECT ----------------
 @app.route("/<short_code>")
 def redirect_url(short_code):
-    try:
-        # ignore unwanted paths
-        if short_code in ["favicon.ico", "shorten", "stats"]:
-            return "", 204
 
+    if short_code in ["favicon.ico", "shorten", "stats"]:
+        return "", 204
+
+    conn = None
+    try:
         conn = get_connection()
         cursor = conn.cursor()
 
@@ -87,19 +85,20 @@ def redirect_url(short_code):
 
         url, clicks = result
 
-        # update clicks
         cursor.execute(
             "UPDATE urls SET clicks=? WHERE short_code=?",
             (clicks + 1, short_code)
         )
-
         conn.commit()
-        conn.close()
 
         return redirect(url)
 
     except Exception as e:
         return f"ERROR: {str(e)}", 500
+
+    finally:
+        if conn:
+            conn.close()
 
 # ---------------- STATS ----------------
 @app.route("/stats/<short_code>")

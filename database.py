@@ -1,6 +1,6 @@
 import sqlite3
 
-DB_PATH = "/tmp/urls.db"  # IMPORTANT for Render
+DB_PATH = "/tmp/urls.db"  # Render-safe path
 
 def get_connection():
     return sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
