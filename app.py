@@ -8,6 +8,7 @@ import qrcode
 import io
 import base64
 import re
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -130,11 +131,18 @@ def shorten():
         "qr": qr_base64
     })
 
+# ---------------- FIX URL ----------------
+def fix_url(url):
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        return "https://" + url
+    return url
+
 # ---------------- REDIRECT ----------------
 @app.route("/<short_code>")
 def redirect_url(short_code):
 
-    # ignore invalid paths
+    # ignore unwanted paths
     if short_code in ["favicon.ico", "shorten", "stats"]:
         return "", 204
 
@@ -145,9 +153,9 @@ def redirect_url(short_code):
                 cached = r.get(short_code)
                 if cached:
                     r.incr(f"clicks:{short_code}")
-                    return redirect(cached)
-            except:
-                pass
+                    return redirect(fix_url(cached))
+            except Exception as e:
+                print("Redis error:", e)
 
         # DB fallback
         conn = get_connection()
@@ -164,22 +172,23 @@ def redirect_url(short_code):
         if expiry and is_expired(expiry):
             return "Expired", 410
 
+        safe_url = fix_url(url)
+
         cursor.execute("UPDATE urls SET clicks=? WHERE short_code=?", (clicks+1, short_code))
         conn.commit()
         conn.close()
 
-        # Cache again
         if REDIS_AVAILABLE:
             try:
                 r.set(short_code, url)
             except:
                 pass
 
-        return redirect(url)
+        return redirect(safe_url)
 
     except Exception as e:
-        print("🔥 ERROR:", e)
-        return "Internal error", 500
+        print("🔥 ERROR:", str(e))
+        return f"ERROR: {str(e)}", 500
 
 # ---------------- STATS ----------------
 @app.route("/stats/<short_code>")
