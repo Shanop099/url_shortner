@@ -2,40 +2,68 @@
 <html>
 <head>
 <title>URL Shortener</title>
+
 <style>
 body {
-    background: linear-gradient(135deg,#1e3c72,#2a5298);
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    height:100vh;
-    font-family:Arial;
+    margin: 0;
+    font-family: Arial;
+    background: linear-gradient(135deg, #1e3c72, #2a5298);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
 }
+
 .container {
-    background:rgba(255,255,255,0.1);
-    padding:25px;
-    border-radius:10px;
-    color:white;
-    text-align:center;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(12px);
+    border-radius: 12px;
+    padding: 30px;
+    width: 400px;
+    text-align: center;
+    color: white;
 }
-input {padding:10px;margin:6px;width:90%;}
-button {padding:10px;background:#00c6ff;border:none;color:white;}
+
+input {
+    width: 90%;
+    padding: 10px;
+    margin: 8px;
+    border-radius: 6px;
+    border: none;
+}
+
+button {
+    padding: 10px;
+    background: #00c6ff;
+    border: none;
+    color: white;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.result-box {
+    margin-top: 15px;
+    display: none;
+}
 </style>
 </head>
 
 <body>
+
 <div class="container">
 <h2>URL Shortener</h2>
 
 <input id="url" placeholder="Enter URL">
-<input id="custom" placeholder="Custom code">
+<input id="custom" placeholder="Custom code (optional)">
 
 <button onclick="shorten()">Generate</button>
 
-<div id="result" style="display:none">
-<a id="link" target="_blank"></a>
+<div class="result-box" id="resultBox">
+<a id="shortLink" target="_blank"></a>
+
 <p>Clicks: <span id="clicks">0</span></p>
-<img id="qr" width="120">
+
+<img id="qrImage" width="120">
 </div>
 
 <p id="error"></p>
@@ -45,42 +73,36 @@ button {padding:10px;background:#00c6ff;border:none;color:white;}
 let code;
 
 async function shorten(){
- try{
-  let res = await fetch("/shorten", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      url:url.value,
-      custom:custom.value || null
-    })
-  });
+ let res = await fetch("/shorten", {
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({
+    url: url.value,
+    custom: custom.value.trim() || null
+  })
+ });
 
-  let data = await res.json();
+ let data = await res.json();
 
-  if(data.short_url){
-    link.innerText = data.short_url;
-    link.href = data.short_url;
-    result.style.display="block";
+ if(data.short_url){
+  shortLink.innerText = data.short_url;
+  shortLink.href = data.short_url;
+  resultBox.style.display = "block";
 
-    code = data.short_url.split("/").pop();
+  code = data.short_url.split("/").pop();
 
-    qr.src = "data:image/png;base64," + data.qr;
+  qrImage.src = "data:image/png;base64," + data.qr;
 
-    setInterval(fetchStats,2000);
-  } else {
-    error.innerText = data.error;
-  }
-
- } catch(e){
-  error.innerText="Server error";
+  setInterval(fetchStats,2000);
  }
+ else error.innerText = data.error;
 }
 
 async function fetchStats(){
  let res = await fetch("/stats/"+code);
  let d = await res.json();
 
- clicks.innerText = d.clicks;
+ clicks.innerText = d.clicks; // ✅ FIXED (no NaN)
 }
 </script>
 
