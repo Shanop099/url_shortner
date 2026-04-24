@@ -2,14 +2,27 @@ from flask import Flask, request, redirect, jsonify, render_template
 from database import init_db, get_connection
 from utils import generate_code, is_expired
 from datetime import datetime, timedelta
-import os, redis, qrcode, io, base64, re
+import os
+import redis
+import qrcode
+import io
+import base64
+import re
 
 app = Flask(__name__)
 
 # ---------------- CONFIG ----------------
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000/")
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-r = redis.from_url(redis_url, decode_responses=True)
+
+try:
+    r = redis.from_url(redis_url, decode_responses=True)
+    r.ping()
+    REDIS_AVAILABLE = True
+    print("✅ Redis connected")
+except:
+    REDIS_AVAILABLE = False
+    print("⚠️ Redis not available, using fallback")
 
 init_db()
 
@@ -18,6 +31,9 @@ TIME_WINDOW = 60
 
 # ---------------- RATE LIMIT ----------------
 def is_rate_limited(ip):
+    if not REDIS_AVAILABLE:
+        return False
+
     key = f"rate:{ip}"
     try:
         if r.exists(key):
@@ -27,7 +43,7 @@ def is_rate_limited(ip):
         else:
             r.set(key, 1, ex=TIME_WINDOW)
     except:
-        pass  # fallback if Redis fails
+        return False
     return False
 
 # ---------------- UI ----------------
@@ -51,13 +67,13 @@ def shorten():
     if not url:
         return jsonify({"error": "URL required"}), 400
 
-    # FIXED CUSTOM HANDLING
+    # FIX CUSTOM INPUT
     if custom:
         custom = custom.strip()
         if custom == "":
             custom = None
 
-    # VALIDATION
+    # VALIDATE CUSTOM
     if custom:
         if not re.match("^[a-zA-Z0-9_-]+$", custom):
             return jsonify({"error": "Invalid custom code"}), 400
@@ -65,7 +81,7 @@ def shorten():
     conn = get_connection()
     cursor = conn.cursor()
 
-    if custom is not None:
+    if custom:
         cursor.execute("SELECT 1 FROM urls WHERE short_code=?", (custom,))
         if cursor.fetchone():
             return jsonify({"error": "Custom already exists"}), 400
@@ -91,10 +107,11 @@ def shorten():
     conn.close()
 
     # CACHE
-    try:
-        r.set(short_code, url)
-    except:
-        pass
+    if REDIS_AVAILABLE:
+        try:
+            r.set(short_code, url)
+        except:
+            pass
 
     # QR CODE
     qr = qrcode.make(BASE_URL + short_code)
@@ -111,13 +128,21 @@ def shorten():
 @app.route("/<short_code>")
 def redirect_url(short_code):
 
-    try:
-        cached = r.get(short_code)
-        if cached:
-            r.incr(f"clicks:{short_code}")
-            return redirect(cached)
-    except:
-        pass
+    # SAFE REDIS GET
+    cached = None
+    if REDIS_AVAILABLE:
+        try:
+            cached = r.get(short_code)
+        except:
+            cached = None
+
+    if cached:
+        if REDIS_AVAILABLE:
+            try:
+                r.incr(f"clicks:{short_code}")
+            except:
+                pass
+        return redirect(cached)
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -137,10 +162,12 @@ def redirect_url(short_code):
     conn.commit()
     conn.close()
 
-    try:
-        r.set(short_code, url)
-    except:
-        pass
+    # CACHE AGAIN
+    if REDIS_AVAILABLE:
+        try:
+            r.set(short_code, url)
+        except:
+            pass
 
     return redirect(url)
 
@@ -158,10 +185,11 @@ def stats(short_code):
         return jsonify({"error": "Not found"}), 404
 
     redis_clicks = 0
-    try:
-        redis_clicks = int(r.get(f"clicks:{short_code}") or 0)
-    except:
-        pass
+    if REDIS_AVAILABLE:
+        try:
+            redis_clicks = int(r.get(f"clicks:{short_code}") or 0)
+        except:
+            redis_clicks = 0
 
     return jsonify({
         "url": result[0],
