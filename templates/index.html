@@ -55,6 +55,7 @@ button {
 
 <input id="url" placeholder="Enter URL">
 <input id="custom" placeholder="Custom code (optional)">
+<input id="expiry" placeholder="Expiry (minutes optional)">
 
 <button onclick="shorten()">Generate</button>
 
@@ -78,7 +79,8 @@ async function shorten(){
   headers:{"Content-Type":"application/json"},
   body:JSON.stringify({
     url: url.value,
-    custom: custom.value.trim() || null
+    custom: custom.value.trim() || null,
+    expiry: expiry.value || null
   })
  });
 
@@ -102,7 +104,7 @@ async function fetchStats(){
  let res = await fetch("/stats/"+code);
  let d = await res.json();
 
- clicks.innerText = d.clicks; // ✅ FIXED (no NaN)
+ clicks.innerText = d.clicks;
 }
 </script>
 
