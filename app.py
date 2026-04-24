@@ -1,5 +1,5 @@
 from flask import Flask, request, redirect, jsonify, render_template
-import random, string
+import random, string, time
 import qrcode
 import io, base64
 import os
@@ -19,16 +19,14 @@ try:
         print("✅ Redis connected")
     else:
         REDIS_AVAILABLE = False
-        print("❌ REDIS_URL not set")
-except Exception as e:
+except:
     REDIS_AVAILABLE = False
-    print("❌ Redis failed:", e)
 
-# -------- FALLBACK MEMORY --------
+# fallback
 url_db = {}
 clicks_db = {}
+expiry_db = {}
 
-# -------- CONFIG --------
 RATE_LIMIT = 5
 TIME_WINDOW = 60
 
@@ -82,13 +80,15 @@ def shorten():
 
     url = fix_url(url)
 
-    # generate code
-    if custom:
-        short_code = custom
-    else:
-        short_code = generate_code()
+    short_code = custom if custom else generate_code()
 
-    ttl = int(expiry) * 60 if expiry else None
+    # -------- SAFE EXPIRY --------
+    try:
+        ttl = int(expiry) * 60 if expiry and str(expiry).strip() != "" else None
+    except:
+        ttl = None
+
+    expire_at = int(time.time()) + ttl if ttl else None
 
     # -------- STORE --------
     if REDIS_AVAILABLE:
@@ -100,11 +100,11 @@ def shorten():
 
             r.set(f"clicks:{short_code}", 0)
         except:
-            REDIS_AVAILABLE = False
+            pass
 
-    # fallback
     url_db[short_code] = url
     clicks_db[short_code] = 0
+    expiry_db[short_code] = expire_at
 
     # -------- QR --------
     qr = qrcode.make(BASE_URL + short_code)
@@ -114,7 +114,8 @@ def shorten():
 
     return jsonify({
         "short_url": BASE_URL + short_code,
-        "qr": qr_base64
+        "qr": qr_base64,
+        "expire_at": expire_at
     })
 
 # -------- REDIRECT --------
@@ -124,7 +125,7 @@ def redirect_url(short_code):
     if short_code in ["favicon.ico", "shorten", "stats"]:
         return "", 204
 
-    # Redis first
+    # Redis
     if REDIS_AVAILABLE:
         try:
             url = r.get(f"url:{short_code}")
@@ -134,8 +135,12 @@ def redirect_url(short_code):
         except:
             pass
 
-    # fallback
+    # fallback expiry check
     if short_code in url_db:
+        if expiry_db.get(short_code):
+            if time.time() > expiry_db[short_code]:
+                return "Link expired", 404
+
         clicks_db[short_code] += 1
         return redirect(url_db[short_code])
 
@@ -151,14 +156,22 @@ def stats(short_code):
             clicks = int(r.get(f"clicks:{short_code}") or 0)
 
             if url:
-                return jsonify({"url": url, "clicks": clicks})
+                ttl = r.ttl(f"url:{short_code}")
+                expire_at = int(time.time()) + ttl if ttl > 0 else None
+
+                return jsonify({
+                    "url": url,
+                    "clicks": clicks,
+                    "expire_at": expire_at
+                })
         except:
             pass
 
     if short_code in url_db:
         return jsonify({
             "url": url_db[short_code],
-            "clicks": clicks_db[short_code]
+            "clicks": clicks_db[short_code],
+            "expire_at": expiry_db.get(short_code)
         })
 
     return jsonify({"error": "Not found"}), 404
