@@ -2,7 +2,6 @@
 <html>
 <head>
 <title>URL Shortener</title>
-
 <style>
 body {
     background: linear-gradient(135deg,#1e3c72,#2a5298);
@@ -30,7 +29,7 @@ button {padding:10px;background:#00c6ff;border:none;color:white;}
 
 <input id="url" placeholder="Enter URL">
 <input id="custom" placeholder="Custom code">
-<input id="expiry" placeholder="Expiry (minutes)">
+<input id="expiry" placeholder="Expiry (minutes optional)">
 
 <button onclick="shorten()">Generate</button>
 
@@ -49,19 +48,18 @@ let code;
 let expireAt;
 
 async function shorten(){
- let res = await fetch("/shorten", {
-  method:"POST",
-  headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({
-    url:url.value,
-    custom:custom.value || null,
-    expiry:expiry.value || null
-  })
- });
-
- let text = await res.text();
-
  try{
+  let res = await fetch("/shorten", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      url:url.value,
+      custom:custom.value || null,
+      expiry:expiry.value || null
+    })
+  });
+
+  let text = await res.text();
   let data = JSON.parse(text);
 
   if(data.short_url){
@@ -70,22 +68,25 @@ async function shorten(){
     result.style.display="block";
 
     code = data.short_url.split("/").pop();
-    expireAt = data.expire_at;
 
     qr.src = "data:image/png;base64," + data.qr;
 
     setInterval(fetchStats,2000);
     setInterval(updateTimer,1000);
-  } else error.innerText = data.error;
+  } else {
+    error.innerText = data.error;
+  }
 
- }catch{
-  error.innerText="Server error";
+ } catch(e){
+  error.innerText = "Server error";
+  console.log(e);
  }
 }
 
 async function fetchStats(){
  let res = await fetch("/stats/"+code);
  let d = await res.json();
+
  clicks.innerText = d.clicks;
  expireAt = d.expire_at;
 }
@@ -96,7 +97,14 @@ function updateTimer(){
    return;
  }
 
- let remaining = expireAt - Math.floor(Date.now()/1000);
+ let now = Math.floor(Date.now()/1000);
+
+ if(isNaN(expireAt)){
+   timer.innerText = "No expiry";
+   return;
+ }
+
+ let remaining = expireAt - now;
 
  if(remaining <= 0){
    timer.innerText = "Expired";

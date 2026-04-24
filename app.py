@@ -10,23 +10,16 @@ app = Flask(__name__)
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000/")
 REDIS_URL = os.getenv("REDIS_URL")
 
-# -------- REDIS SAFE SETUP --------
+# -------- REDIS SETUP --------
 try:
-    if REDIS_URL:
-        r = redis.from_url(REDIS_URL, decode_responses=True)
-        r.ping()
-        REDIS_AVAILABLE = True
-        print("✅ Redis connected")
-    else:
-        REDIS_AVAILABLE = False
-except:
-    REDIS_AVAILABLE = False
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    r.ping()
+    print("✅ Redis connected")
+except Exception as e:
+    print("❌ Redis error:", e)
+    raise e   # ❗ fail fast (no silent bugs)
 
-# fallback
-url_db = {}
-clicks_db = {}
-expiry_db = {}
-
+# -------- CONFIG --------
 RATE_LIMIT = 5
 TIME_WINDOW = 60
 
@@ -41,19 +34,14 @@ def fix_url(url):
 
 # -------- RATE LIMIT --------
 def is_rate_limited(ip):
-    if not REDIS_AVAILABLE:
-        return False
-
     key = f"rate:{ip}"
-    try:
-        if r.exists(key):
-            if int(r.get(key)) >= RATE_LIMIT:
-                return True
-            r.incr(key)
-        else:
-            r.set(key, 1, ex=TIME_WINDOW)
-    except:
-        return False
+
+    if r.exists(key):
+        if int(r.get(key)) >= RATE_LIMIT:
+            return True
+        r.incr(key)
+    else:
+        r.set(key, 1, ex=TIME_WINDOW)
 
     return False
 
@@ -71,6 +59,7 @@ def shorten():
         return jsonify({"error": "Rate limit exceeded"}), 429
 
     data = request.get_json()
+
     url = data.get("url")
     custom = data.get("custom")
     expiry = data.get("expiry")
@@ -80,7 +69,15 @@ def shorten():
 
     url = fix_url(url)
 
-    short_code = custom if custom else generate_code()
+    # -------- CODE GENERATION --------
+    if custom:
+        short_code = custom
+        if r.exists(f"url:{short_code}"):
+            return jsonify({"error": "Custom already exists"}), 400
+    else:
+        short_code = generate_code()
+        while r.exists(f"url:{short_code}"):
+            short_code = generate_code()
 
     # -------- SAFE EXPIRY --------
     try:
@@ -88,23 +85,13 @@ def shorten():
     except:
         ttl = None
 
-    expire_at = int(time.time()) + ttl if ttl else None
+    # -------- STORE IN REDIS ONLY --------
+    if ttl:
+        r.setex(f"url:{short_code}", ttl, url)
+    else:
+        r.set(f"url:{short_code}", url)
 
-    # -------- STORE --------
-    if REDIS_AVAILABLE:
-        try:
-            if ttl:
-                r.setex(f"url:{short_code}", ttl, url)
-            else:
-                r.set(f"url:{short_code}", url)
-
-            r.set(f"clicks:{short_code}", 0)
-        except:
-            pass
-
-    url_db[short_code] = url
-    clicks_db[short_code] = 0
-    expiry_db[short_code] = expire_at
+    r.set(f"clicks:{short_code}", 0)
 
     # -------- QR --------
     qr = qrcode.make(BASE_URL + short_code)
@@ -114,8 +101,7 @@ def shorten():
 
     return jsonify({
         "short_url": BASE_URL + short_code,
-        "qr": qr_base64,
-        "expire_at": expire_at
+        "qr": qr_base64
     })
 
 # -------- REDIRECT --------
@@ -125,56 +111,44 @@ def redirect_url(short_code):
     if short_code in ["favicon.ico", "shorten", "stats"]:
         return "", 204
 
-    # Redis
-    if REDIS_AVAILABLE:
-        try:
-            url = r.get(f"url:{short_code}")
-            if url:
-                r.incr(f"clicks:{short_code}")
-                return redirect(url)
-        except:
-            pass
+    try:
+        url = r.get(f"url:{short_code}")
 
-    # fallback expiry check
-    if short_code in url_db:
-        if expiry_db.get(short_code):
-            if time.time() > expiry_db[short_code]:
-                return "Link expired", 404
+        if not url:
+            return "Link expired or not found", 404
 
-        clicks_db[short_code] += 1
-        return redirect(url_db[short_code])
+        r.incr(f"clicks:{short_code}")
 
-    return "Not found", 404
+        return redirect(url)
+
+    except Exception as e:
+        print("REDIRECT ERROR:", e)
+        return "Server error", 500
 
 # -------- STATS --------
 @app.route("/stats/<short_code>")
 def stats(short_code):
 
-    if REDIS_AVAILABLE:
-        try:
-            url = r.get(f"url:{short_code}")
-            clicks = int(r.get(f"clicks:{short_code}") or 0)
+    try:
+        url = r.get(f"url:{short_code}")
 
-            if url:
-                ttl = r.ttl(f"url:{short_code}")
-                expire_at = int(time.time()) + ttl if ttl > 0 else None
+        if not url:
+            return jsonify({"error": "Not found"}), 404
 
-                return jsonify({
-                    "url": url,
-                    "clicks": clicks,
-                    "expire_at": expire_at
-                })
-        except:
-            pass
+        clicks = int(r.get(f"clicks:{short_code}") or 0)
 
-    if short_code in url_db:
+        ttl = r.ttl(f"url:{short_code}")
+        expire_at = int(time.time()) + ttl if ttl > 0 else None
+
         return jsonify({
-            "url": url_db[short_code],
-            "clicks": clicks_db[short_code],
-            "expire_at": expiry_db.get(short_code)
+            "url": url,
+            "clicks": clicks,
+            "expire_at": expire_at
         })
 
-    return jsonify({"error": "Not found"}), 404
+    except Exception as e:
+        print("STATS ERROR:", e)
+        return jsonify({"error": "Server error"}), 500
 
 
 if __name__ == "__main__":
