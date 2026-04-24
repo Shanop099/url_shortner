@@ -1,12 +1,14 @@
-import string
 import random
+import string
 from datetime import datetime
 
 def generate_code(length=6):
-    chars = string.ascii_letters + string.digits
-    return ''.join(random.choice(chars) for _ in range(length))
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def is_expired(expiry):
-    if expiry is None:
+    if not expiry:
         return False
-    return datetime.utcnow() > datetime.fromisoformat(expiry)
+    try:
+        return datetime.utcnow() > datetime.fromisoformat(expiry)
+    except:
+        return False

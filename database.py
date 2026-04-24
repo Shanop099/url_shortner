@@ -1,9 +1,11 @@
 import sqlite3
+import os
 
-DB_NAME = "urls.db"
+# Use writable path on Render
+DB_PATH = "/tmp/urls.db"
 
 def get_connection():
-    return sqlite3.connect(DB_NAME)
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def init_db():
     conn = get_connection()
@@ -11,12 +13,10 @@ def init_db():
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS urls (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        short_code TEXT UNIQUE,
-        original_url TEXT,
+        short_code TEXT PRIMARY KEY,
+        original_url TEXT NOT NULL,
         clicks INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        expiry TIMESTAMP
+        expiry TEXT
     )
     """)
 

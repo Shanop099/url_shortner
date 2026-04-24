@@ -13,8 +13,9 @@ app = Flask(__name__)
 
 # ---------------- CONFIG ----------------
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000/")
-redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_url = os.getenv("REDIS_URL", "")
 
+# Redis safe setup
 try:
     r = redis.from_url(redis_url, decode_responses=True)
     r.ping()
@@ -22,8 +23,9 @@ try:
     print("✅ Redis connected")
 except:
     REDIS_AVAILABLE = False
-    print("⚠️ Redis not available, using fallback")
+    print("⚠️ Redis not available")
 
+# Init DB (VERY IMPORTANT)
 init_db()
 
 RATE_LIMIT = 5
@@ -44,6 +46,7 @@ def is_rate_limited(ip):
             r.set(key, 1, ex=TIME_WINDOW)
     except:
         return False
+
     return False
 
 # ---------------- UI ----------------
@@ -67,13 +70,11 @@ def shorten():
     if not url:
         return jsonify({"error": "URL required"}), 400
 
-    # FIX CUSTOM INPUT
     if custom:
         custom = custom.strip()
         if custom == "":
             custom = None
 
-    # VALIDATE CUSTOM
     if custom:
         if not re.match("^[a-zA-Z0-9_-]+$", custom):
             return jsonify({"error": "Invalid custom code"}), 400
@@ -106,14 +107,14 @@ def shorten():
     conn.commit()
     conn.close()
 
-    # CACHE
+    # Cache
     if REDIS_AVAILABLE:
         try:
             r.set(short_code, url)
         except:
             pass
 
-    # QR CODE
+    # QR
     qr = qrcode.make(BASE_URL + short_code)
     buffer = io.BytesIO()
     qr.save(buffer, format="PNG")
@@ -127,49 +128,47 @@ def shorten():
 # ---------------- REDIRECT ----------------
 @app.route("/<short_code>")
 def redirect_url(short_code):
-
-    # SAFE REDIS GET
-    cached = None
-    if REDIS_AVAILABLE:
-        try:
-            cached = r.get(short_code)
-        except:
-            cached = None
-
-    if cached:
+    try:
+        # Redis first
         if REDIS_AVAILABLE:
             try:
-                r.incr(f"clicks:{short_code}")
+                cached = r.get(short_code)
+                if cached:
+                    r.incr(f"clicks:{short_code}")
+                    return redirect(cached)
+            except Exception as e:
+                print("Redis error:", e)
+
+        # DB fallback
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT original_url, clicks, expiry FROM urls WHERE short_code=?", (short_code,))
+        result = cursor.fetchone()
+
+        if not result:
+            return "Not found", 404
+
+        url, clicks, expiry = result
+
+        if expiry and is_expired(expiry):
+            return "Expired", 410
+
+        cursor.execute("UPDATE urls SET clicks=? WHERE short_code=?", (clicks+1, short_code))
+        conn.commit()
+        conn.close()
+
+        if REDIS_AVAILABLE:
+            try:
+                r.set(short_code, url)
             except:
                 pass
-        return redirect(cached)
 
-    conn = get_connection()
-    cursor = conn.cursor()
+        return redirect(url)
 
-    cursor.execute("SELECT original_url, clicks, expiry FROM urls WHERE short_code=?", (short_code,))
-    result = cursor.fetchone()
-
-    if not result:
-        return "Not found", 404
-
-    url, clicks, expiry = result
-
-    if is_expired(expiry):
-        return "Expired", 410
-
-    cursor.execute("UPDATE urls SET clicks=? WHERE short_code=?", (clicks+1, short_code))
-    conn.commit()
-    conn.close()
-
-    # CACHE AGAIN
-    if REDIS_AVAILABLE:
-        try:
-            r.set(short_code, url)
-        except:
-            pass
-
-    return redirect(url)
+    except Exception as e:
+        print("🔥 ERROR:", str(e))
+        return f"Error: {str(e)}", 500
 
 # ---------------- STATS ----------------
 @app.route("/stats/<short_code>")
